@@ -1,0 +1,278 @@
+﻿<html>
+<head>
+    <style>
+        body {
+            background: linear-gradient(to bottom, #1b1b2f, #162447, #1f4068, #1b1b2f);
+            color: white;
+            text-align: center;
+            font-family: 'Comic Sans MS', cursive, sans-serif;
+            overflow: hidden;
+            margin: 0;
+        }
+
+        h1 {
+            font-size: 3rem;
+            font-weight: bold;
+            color: #ffdf00;
+            text-shadow: 0 0 20px #ffdf00, 0 0 30px #ff8c00, 0 0 40px #ff4500;
+            animation: glow 2s infinite alternate;
+        }
+
+        @keyframes glow {
+            0% {
+                text-shadow: 0 0 20px #ffdf00, 0 0 30px #ff8c00, 0 0 40px #ff4500;
+            }
+
+            100% {
+                text-shadow: 0 0 30px #ffd700, 0 0 40px #ffa500, 0 0 50px #ff6347;
+            }
+        }
+
+        canvas {
+            border: 5px solid #FFFACD;
+            background: linear-gradient(to bottom, #243b55, #141e30);
+            box-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff, 0 0 30px #008080;
+            margin-top: 20px;
+        }
+
+        #PlayerScore {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-top: 15px;
+            display: block;
+            color: #32cd32;
+            text-shadow: 0 0 15px #32cd32, 0 0 25px #2e8b57;
+            animation: blink 1s infinite alternate;
+        }
+
+        @keyframes blink {
+            0% {
+                text-shadow: 0 0 15px #32cd32, 0 0 25px #2e8b57;
+            }
+
+            100% {
+                text-shadow: 0 0 25px #98fb98, 0 0 35px #90ee90;
+            }
+        }
+
+        .snowflake {
+            position: absolute; /* используем абсолютное позиционирование */
+            color: #FFF;
+            z-index: 1000;
+            animation: fall linear infinite;
+        }
+
+        @keyframes fall {
+            0% {
+                transform: translateY(-10px) translateX(0); /* начинаем падение сверху */
+            }
+
+            100% {
+                transform: translateY(100vh) translateX(50px); /* падаем вниз с небольшим отклонением по X */
+            }
+        }
+
+        @keyframes shimmer {
+            0%, 100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: scale(1.2);
+                opacity: 0.8;
+            }
+        }
+
+        .snowflake:hover {
+            animation: shimmer 1.5s infinite;
+        }
+
+        /* Добавляем анимацию гирлянды */
+        body::after {
+            content: "";
+            display: block;
+            position: absolute;
+            width: 100%;
+            height: 8px;
+            top: 0;
+            left: 0;
+            background: linear-gradient( 90deg, #ff0000 0%, #ffa500 25%, #ffff00 50%, #00ff00 75%, #0000ff 100% );
+            box-shadow: 0 0 10px #ff0000, 0 0 20px #ffa500, 0 0 30px #ffff00, 0 0 40px #00ff00, 0 0 50px #0000ff;
+            animation: lights 2s infinite;
+        }
+
+        @keyframes lights {
+            0% {
+                filter: hue-rotate(0deg);
+            }
+
+            100% {
+                filter: hue-rotate(360deg);
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Год Змеи 2025</h1>
+    <canvas id="gameCanvas" width="500" height="500"></canvas>
+    <span class="Score" id="PlayerScore">Счет: 0</span>
+
+    <script>
+        let canvas = document.getElementById("gameCanvas");
+        let ctx = canvas.getContext("2d");
+
+        let Snake = [{ x: 3, y: 3 }];
+        let Direction = { x: 0, y: 1 };
+        let AppleLocation = { x: 2, y: 2 };
+
+        const XSize = 10;
+        const YSize = 10;
+        const CellSize = 50;
+
+        let GameSpeed = 700;
+        let score = 0;
+
+        function InitGame() {
+            AddApple();
+            CreateSnowflakes();
+            GameLoop();
+        }
+
+        function HandleCollision() {
+            if (Snake[0].x < 0 || Snake[0].y < 0 || Snake[0].y >= YSize) {
+                EndGame("Вы проиграли!");
+            }
+
+            for (let i = 1; i < Snake.length; i++) {
+                if (Snake[0].x === Snake[i].x && Snake[0].y === Snake[i].y) {
+                    EndGame("Вы проиграли!");
+                }
+            }
+        }
+
+        function EndGame(message) {
+            alert(message);
+            ResetGame();
+        }
+
+        function ResetGame() {
+            Snake = [{ x: 3, y: 3 }];
+            Direction = { x: 0, y: 1 };
+            score = 0;
+            document.getElementById("PlayerScore").textContent = 'Счет: ${ score }';
+            AddApple();
+        }
+
+        function GetRandomInt(min, max) {
+            return Math.floor(Math.random() * (max - min + 1)) + min;
+        }
+
+        function AddApple() {
+            AppleLocation.x = GetRandomInt(0, XSize - 1);
+            AppleLocation.y = GetRandomInt(0, YSize - 1);
+        }
+
+        function MakeMap() {
+            let newHead = {
+                x: Snake[0].x + Direction.x,
+                y: Snake[0].y + Direction.y
+            };
+
+            Snake.unshift(newHead);
+
+            HandleCollision();
+
+            if (Snake[0].x === AppleLocation.x && Snake[0].y === AppleLocation.y) {
+                score++;
+                document.getElementById("PlayerScore").textContent = `Счет: ${ score }`;
+                GameSpeed = Math.max(100, GameSpeed - 20);
+                AddApple();
+            } else {
+                Snake.pop();
+            }
+        }
+
+        async function GameLoop() {
+            MakeMap();
+            DrawMap();
+            setTimeout(GameLoop, GameSpeed);
+        }
+
+        function DrawMap() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.strokeStyle = "white";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(0, 0, XSize * CellSize, YSize * CellSize);
+
+            ctx.fillStyle = "green";
+            for (let i = 0; i < Snake.length; i++) {
+                ctx.fillRect(
+                    Snake[i].x * CellSize,
+                    Snake[i].y * CellSize,
+                    CellSize,
+                    CellSize
+                );
+                ctx.fillStyle = "darkgreen";
+            }
+
+            let giftImage = new Image();
+            giftImage.src = "Surp-Photoroom.png";
+            ctx.drawImage(
+                giftImage,
+                AppleLocation.x * CellSize,
+                AppleLocation.y * CellSize,
+                CellSize,
+                CellSize
+            );
+        }
+
+        document.addEventListener("keydown", (event) => {
+            switch (event.key) {
+                case "w":
+                    if (Direction.y !== 1) Direction = { x: 0, y: -1 };
+                    break;
+                case "s":
+                    if (Direction.y !== -1) Direction = { x: 0, y: 1 };
+                    break;
+                case "a":
+                    if (Direction.x !== 1) Direction = { x: -1, y: 0 };
+                    break;
+                case "d":
+                    if (Direction.x !== -1) Direction = { x: 1, y: 0 };
+                    break;
+            }
+        });
+
+        function CreateSnowflakes() {
+            for (let i = 0; i < 50; i++) {
+                let snowflake = document.createElement("div");
+                snowflake.classList.add("snowflake");
+
+                
+                snowflake.style.left = `${ Math.random() * window.innerWidth } px`;
+
+                // Случайное начальное положение по вертикали
+                snowflake.style.top = `${ Math.random() * -100 } px`; // Падаем с небольшим отступом выше экрана
+
+                // Случайная продолжительность анимации
+                snowflake.style.animationDuration = `${ Math.random() * 15 + 3 } s`;
+
+                // Случайный размер снежинки
+                snowflake.style.fontSize = `${ Math.random() * 30 + 30 } px`;
+
+                // Содержимое снежинки
+                snowflake.textContent = "❄";
+
+                // Добавляем снежинку в body
+                document.body.appendChild(snowflake);
+            }
+        }
+
+        InitGame();
+    </script>
+
+</body>
+</html>
