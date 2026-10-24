@@ -8,6 +8,7 @@
         <meta-data android:name="moe.shizuku.client.V3_SUPPORT" android:value="true" />
         <provider android:name="rikka.shizuku.ShizukuProvider" android:authorities="${applicationId}.shizuku" android:multiprocess="false" android:enabled="true" android:exported="true" android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
         <service android:name=".BridgeKeeper" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User initiated local game controller evdev/uinput remapping with persistent stop control" /></service>
+        <activity android:name=".CalibrationActivity" android:exported="false" />
         <activity android:name=".InputTestActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
     </application>

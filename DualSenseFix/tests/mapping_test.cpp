@@ -28,5 +28,35 @@ int main(){
  failed=false;try{n.parse("k 1 99\n");}catch(...){failed=true;}assert(failed);
  assert(scale(-10,0,255,2)==0&&scale(300,0,255,2)==255);
  assert(scale(5,5,5,0)==0);
- std::cout<<"PASS: axis remap, normalization, deadzone, Circle, unknown keys, profiles, D-pad, SYN_REPORT, serialization, invalid mappings\n";
+ // Learn each HAT direction, including a reversed X axis.
+ Mapping hats;hats.learnHat(16,-1,0,16);hats.learnHat(16,1,0,15);
+ hats.learnHat(17,-1,0,13);hats.learnHat(17,1,0,14);
+ assert(!hats.axes.count(16)&&!hats.axes.count(17));
+ Mapping reloaded;reloaded.parse(hats.dump());assert(hats.dump()==reloaded.dump());
+ const int cases[][4]={{16,-1,16,1},{16,1,16,-1},{17,-1,17,-1},{17,1,17,1}};
+ for(const auto& c:cases){Remapper each;auto v=each.convert(reloaded,event(EV_ABS,c[0],c[1]),0,range);assert(v.type==EV_ABS&&v.code==c[2]&&v.value==c[3]);v=each.convert(reloaded,event(EV_ABS,c[0],0),0,range);assert(v.value==0);}
+ Remapper remap;
+ e=remap.convert(reloaded,event(EV_ABS,16,-1),0,range);assert(e.code==ABS_HAT0X&&e.value==1);
+ e=remap.convert(reloaded,event(EV_ABS,17,-1),0,range);assert(e.code==ABS_HAT0Y&&e.value==-1);
+ e=remap.convert(reloaded,event(EV_ABS,16,0),0,range);assert(e.code==ABS_HAT0X&&e.value==0);
+ e=remap.convert(reloaded,event(EV_ABS,17,0),0,range);assert(e.code==ABS_HAT0Y&&e.value==0);
+ Mapping digital;digital.learnKey(544,13);digital.learnKey(545,14);digital.learnKey(546,15);digital.learnKey(547,16);
+ assert(!digital.axes.count(16)&&!digital.axes.count(17));
+ Remapper d;
+ e=d.convert(digital,event(EV_KEY,546,1),0,range);assert(e.code==ABS_HAT0X&&e.value==-1);
+ e=d.convert(digital,event(EV_KEY,547,1),0,range);assert(e.value==0);
+ e=d.convert(digital,event(EV_KEY,547,0),0,range);assert(e.value==-1); // Left remains held.
+ e=d.convert(digital,event(EV_KEY,546,0),0,range);assert(e.value==0);
+ // Mixed HAT/button sources also preserve a still-held direction.
+ Mapping mixed;mixed.learnHat(16,-1,0,15);mixed.learnKey(547,16);Remapper mix;
+ mix.convert(mixed,event(EV_ABS,16,-1),0,range);
+ e=mix.convert(mixed,event(EV_KEY,547,1),0,range);assert(e.value==0);
+ e=mix.convert(mixed,event(EV_ABS,16,0),0,range);assert(e.value==1);
+ e=mix.convert(mixed,event(EV_KEY,547,0),0,range);assert(e.value==0);
+ // Nonzero hardware neutral is serialized and released correctly.
+ Mapping offset;offset.learnHat(16,2,1,16);Mapping offset2;offset2.parse(offset.dump());Remapper off;
+ e=off.convert(offset2,event(EV_ABS,16,2),0,range);assert(e.value==1);
+ e=off.convert(offset2,event(EV_ABS,16,1),0,range);assert(e.value==0);
+ assert(hats.axes.at(2)==3&&hats.axes.at(5)==4); // D-pad calibration preserves fixed sticks.
+ std::cout<<"PASS: axis remap, normalization, deadzone, Circle, unknown keys, profiles, D-pad, SYN_REPORT, serialization, invalid mappings, directional HAT calibration, D-pad release/diagonals, mixed sources, preserved sticks\n";
 }

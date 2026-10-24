@@ -25,6 +25,8 @@ std::atomic<long long> lease{0};
 Mapping mapping;
 int learnType=0,learnTarget=0;
 std::map<int,int> currentAxes, baseline;
+std::set<int> pressedKeys;
+std::map<int,input_absinfo> liveRanges;
 std::atomic<bool> diagnosticMode{false};
 std::string status="Stopped", device="Disconnected", phase="stopped", lastError;
 bool virtualReady=false, exclusive=false;
@@ -105,12 +107,13 @@ int discover(std::string& path) {
     closedir(d);return result;
 }
 void neutral(int fd,int profile){for(int i=0;i<13;i++)send(fd,EV_KEY,button(i,profile),0);for(int a:{0,1,2,3,4,5,16,17})send(fd,EV_ABS,a,0);send(fd,EV_SYN,SYN_REPORT,0);}
-void syncState(int source,int target,int profile,const std::map<int,input_absinfo>& ranges) {
+void syncState(int source,int target,int profile,const std::map<int,input_absinfo>& ranges,Remapper& remapper) {
+    remapper.reset();
     unsigned long bits[(KEY_MAX+8*sizeof(long))/(8*sizeof(long))]{};
     check(ioctl(source,EVIOCGKEY(sizeof(bits)),bits)>=0,"EVIOCGKEY");
     Mapping m;{std::lock_guard<std::mutex> l(mu);m=mapping;}
-    for(auto [k,s]:m.keys) { input_event event{}; event.type=EV_KEY;event.code=k;event.value=bit(bits,k)?1:0;input_absinfo r{};auto v=m.convert(event,profile,r);emit(target,v); }
-    for(auto [a,b]:m.axes) {auto r=ranges.find(a);if(r==ranges.end())continue;input_absinfo current{};check(ioctl(source,EVIOCGABS(a),&current)>=0,"axis state");send(target,EV_ABS,b,scale(current.value,current.minimum,current.maximum,b));}
+    for(auto [k,s]:m.keys) { input_event event{}; event.type=EV_KEY;event.code=k;event.value=bit(bits,k)?1:0;input_absinfo r{};auto v=remapper.convert(m,event,profile,r);emit(target,v); }
+    for(auto [a,r]:ranges) {input_absinfo current{};check(ioctl(source,EVIOCGABS(a),&current)>=0,"axis state");input_event event{};event.type=EV_ABS;event.code=a;event.value=current.value;auto v=remapper.convert(m,event,profile,current);if(v.type==EV_ABS)emit(target,v);}
     send(target,EV_SYN,SYN_REPORT,0);
 }
 void run(int profile,bool grab,bool diagnostic) {
@@ -128,12 +131,16 @@ void run(int profile,bool grab,bool diagnostic) {
                     poll(nullptr,0,100);
                 }continue;}
             {std::lock_guard<std::mutex> l(mu);device=path;}
+            Remapper remapper;
+            {std::lock_guard<std::mutex> l(mu);currentAxes.clear();liveRanges.clear();pressedKeys.clear();learnType=0;}
+            unsigned long initialKeys[(KEY_MAX+8*sizeof(long))/(8*sizeof(long))]{};
+            if(ioctl(physical.fd,EVIOCGKEY(sizeof(initialKeys)),initialKeys)>=0){std::lock_guard<std::mutex> l(mu);for(int k=0;k<=KEY_MAX;k++)if(bit(initialKeys,k))pressedKeys.insert(k);}
             std::map<int,input_absinfo> ranges;std::map<int,int> previous;
-            for(int i=0;i<=ABS_MAX;i++){input_absinfo r{};if(ioctl(physical.fd,EVIOCGABS(i),&r)>=0){ranges[i]=r;previous[i]=r.value;{std::lock_guard<std::mutex> l(mu);currentAxes[i]=r.value;}log("ABS "+std::to_string(i)+" min="+std::to_string(r.minimum)+" max="+std::to_string(r.maximum)+" current="+std::to_string(r.value));}}
+            for(int i=0;i<=ABS_MAX;i++){input_absinfo r{};if(ioctl(physical.fd,EVIOCGABS(i),&r)>=0){ranges[i]=r;previous[i]=r.value;{std::lock_guard<std::mutex> l(mu);currentAxes[i]=r.value;liveRanges[i]=r;}log("ABS "+std::to_string(i)+" min="+std::to_string(r.minimum)+" max="+std::to_string(r.maximum)+" current="+std::to_string(r.value));}}
             bool grabbed=false;
             if(!diagnostic) {
                 if(ioctl(physical.fd,EVIOCGRAB,1)<0){log("EVIOCGRAB denied: "+std::string(strerror(errno))+". Diagnostics only; forwarding disabled.");{std::lock_guard<std::mutex> l(mu);lastError="EVIOCGRAB denied: "+std::string(strerror(errno));}diagnostic=true;diagnosticMode=true;if(out.created){ioctl(out.fd,UI_DEV_DESTROY);out.created=false;{std::lock_guard<std::mutex> l(mu);virtualReady=false;}}}
-                else {grabbed=true;{std::lock_guard<std::mutex> l(mu);exclusive=true;}log("EVIOCGRAB acquired");syncState(physical.fd,out.fd,profile,ranges);}
+                else {grabbed=true;{std::lock_guard<std::mutex> l(mu);exclusive=true;}log("EVIOCGRAB acquired");syncState(physical.fd,out.fd,profile,ranges,remapper);}
             }
             state(diagnostic?"Diagnostics: physical input remains enabled":"Bridge active; physical grabbed; virtual ready",diagnostic?"diagnostics":"running");
             // physical FD closure releases EVIOCGRAB even after exceptions/process death.
@@ -145,22 +152,31 @@ void run(int profile,bool grab,bool diagnostic) {
                 for(size_t i=0;i<size_t(n)/sizeof(input_event);i++) {
                     auto e=events[i];
                     if(e.type==EV_SYN&&e.code==SYN_DROPPED){dropped=true;log("SYN_DROPPED; resync at next frame");continue;}
-                    if(dropped){if(e.type==EV_SYN&&e.code==SYN_REPORT){dropped=false;if(out.created)syncState(physical.fd,out.fd,profile,ranges);}continue;}
+                    if(dropped){if(e.type==EV_SYN&&e.code==SYN_REPORT){dropped=false;if(out.created)syncState(physical.fd,out.fd,profile,ranges,remapper);}continue;}
                     if(e.type==EV_KEY||e.type==EV_ABS) {
                         log("ev type="+std::to_string(e.type)+" code="+std::to_string(e.code)+" value="+std::to_string(e.value));
                         std::lock_guard<std::mutex> l(mu);
                         if(e.type==EV_ABS)currentAxes[e.code]=e.value;
-                        if(learnType==e.type&&((e.type==EV_KEY&&e.value==1)||(e.type==EV_ABS&&ranges.count(e.code)&&std::abs(e.value-baseline[e.code])>=std::max(1,(ranges[e.code].maximum-ranges[e.code].minimum)/5)))) {
-                            auto& m=e.type==EV_KEY?mapping.keys:mapping.axes;
-                            for(auto it=m.begin();it!=m.end();)if(it->second==learnTarget)it=m.erase(it);else ++it;
-                            m[e.code]=learnTarget;learnType=0;++learnedRevision;
-                            logs.push_back("LEARNED code="+std::to_string(e.code)+" target="+std::to_string(learnTarget));
+                        if(e.type==EV_KEY) {if(e.value)pressedKeys.insert(e.code);else pressedKeys.erase(e.code);}
+                        bool key=(e.type==EV_KEY&&e.value==1);
+                        bool axis=(e.type==EV_ABS&&ranges.count(e.code)&&std::abs(e.value-baseline[e.code])>=std::max(1,(ranges[e.code].maximum-ranges[e.code].minimum)/5));
+                        bool hat=(axis&&ranges[e.code].maximum-ranges[e.code].minimum<=2&&ranges[e.code].maximum>ranges[e.code].minimum&&e.value!=(ranges[e.code].minimum+ranges[e.code].maximum)/2);
+                        if((learnType==EV_KEY&&key)||(learnType==EV_ABS&&axis&&(learnTarget>=16||(e.code<=ABS_RZ&&ranges[e.code].maximum-ranges[e.code].minimum>2)))||(learnType==4&&(key||hat))) {
+                            if(e.type==EV_KEY)mapping.learnKey(e.code,learnTarget);
+                            else if(learnType==4)mapping.learnHat(e.code,e.value,(ranges[e.code].minimum+ranges[e.code].maximum)/2,learnTarget);
+                            else {
+                                if(learnTarget==2||learnTarget==5)mapping.removeTarget(learnTarget==2?6:7);
+                                for(auto it=mapping.axes.begin();it!=mapping.axes.end();)if(it->second==learnTarget)it=mapping.axes.erase(it);else ++it;
+                                mapping.axes[e.code]=learnTarget;
+                            }
+                            learnType=0;++learnedRevision;
+                            logs.push_back("LEARNED type="+std::to_string(e.type)+" code="+std::to_string(e.code)+" value="+std::to_string(e.value)+" target="+std::to_string(learnTarget));
                         }
                     }
                     if(out.created) {
                         Mapping m;{std::lock_guard<std::mutex> l(mu);m=mapping;}
                         auto r=ranges.find(e.code);input_absinfo range{};if(r!=ranges.end())range=r->second;
-                        auto converted=m.convert(e,profile,range);
+                        auto converted=remapper.convert(m,e,profile,range);
                         if(converted.type==EV_KEY||converted.type==EV_ABS||(converted.type==EV_SYN&&converted.code==SYN_REPORT))emit(out.fd,converted);
                     }
                 }
@@ -184,13 +200,31 @@ extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeSta
 extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeStop(JNIEnv*,jobject){stop();}
 extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeHeartbeat(JNIEnv*,jobject){lease=now();}
 extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeTest(JNIEnv*,jobject){test=true;}
-extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeLearn(JNIEnv*,jobject,jint type,jint target){std::lock_guard<std::mutex> l(mu);if(running&&diagnosticMode&&((type==EV_KEY&&target>=0&&target<17)||(type==EV_ABS&&axisAllowed(target)))){learnType=type;learnTarget=target;baseline=currentAxes;}}
+extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeLearn(JNIEnv*,jobject,jint type,jint target){std::lock_guard<std::mutex> l(mu);if(type==0){learnType=0;return;}if(running&&diagnosticMode&&((type==EV_KEY&&target>=0&&target<17)||(type==4&&target>=13&&target<=16)||(type==EV_ABS&&axisAllowed(target)))){learnType=type;learnTarget=target;baseline=currentAxes;}}
 extern "C" JNIEXPORT jstring JNICALL Java_dev_dualsense_fix_BridgeService_nativeMappings(JNIEnv* e,jobject){std::lock_guard<std::mutex> l(mu);return e->NewStringUTF(mapping.dump().c_str());}
 extern "C" JNIEXPORT jstring JNICALL Java_dev_dualsense_fix_BridgeService_nativeSnapshot(JNIEnv* e,jobject){std::lock_guard<std::mutex> l(mu);std::string s=status+"\nDualSense: "+device+"\n";for(const auto& l:logs)s+=l+"\n";return e->NewStringUTF(s.c_str());}
 
 extern "C" JNIEXPORT jstring JNICALL Java_dev_dualsense_fix_BridgeService_nativeState(JNIEnv* e,jobject){
     std::lock_guard<std::mutex> l(mu);
     std::string error=lastError;std::replace(error.begin(),error.end(),'\n',' ');
-    std::string s="phase="+phase+"\nphysical="+device+"\nvirtual="+(virtualReady?"1":"0")+"\ngrabbed="+(exclusive?"1":"0")+"\ndiagnostic="+(diagnosticMode?"1":"0")+"\nerror="+error+"\nlearning="+std::to_string(learnType)+"\nlearned="+std::to_string(learnedRevision)+"\ntested="+std::to_string(testRevision);
+    bool neutral=pressedKeys.empty();
+    for(auto pair:currentAxes) {
+        int source=pair.first,value=pair.second;
+        auto axis=mapping.axes.find(source);
+        if(axis!=mapping.axes.end()) {
+            auto r=liveRanges[source];int span=r.maximum-r.minimum;
+            if(axis->second>=16)neutral=neutral&&(value==(r.minimum+r.maximum)/2);
+            else if(axis->second==2||axis->second==5)neutral=neutral&&(value<=r.minimum+span/10);
+            else neutral=neutral&&(std::abs(value-(r.minimum+r.maximum)/2)<=std::max(1,span/7));
+        }
+        for(auto h:mapping.hats)if(h.source==source)neutral=neutral&&(value==h.neutral);
+    }
+    std::string s="neutral="+std::string(neutral?"1":"0")+"\nphase="+phase+"\nphysical="+device+"\nvirtual="+(virtualReady?"1":"0")+"\ngrabbed="+(exclusive?"1":"0")+"\ndiagnostic="+(diagnosticMode?"1":"0")+"\nerror="+error+"\nlearning="+std::to_string(learnType)+"\nlearned="+std::to_string(learnedRevision)+"\ntested="+std::to_string(testRevision);
     return e->NewStringUTF(s.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeReplaceMapping(JNIEnv* env,jobject,jstring config) {
+    const char* raw=env->GetStringUTFChars(config,nullptr);std::string text(raw);env->ReleaseStringUTFChars(config,raw);
+    try {Mapping next;next.parse(text);std::lock_guard<std::mutex> l(mu);if(!running||!diagnosticMode)throw std::runtime_error("Mapping replacement requires diagnostics");mapping=next;learnType=0;}
+    catch(const std::exception& ex){env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),ex.what());}
 }

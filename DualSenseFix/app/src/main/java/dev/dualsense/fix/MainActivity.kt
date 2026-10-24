@@ -126,6 +126,12 @@ class MainActivity : Activity() {
                 .setPositiveButton("Запустить") { _, _ -> start(false) }.setNegativeButton("Отмена",null).show()
         }
         stopButton=Ui.button(controls,"Остановить мост",danger=true) { stopBridge() }
+        val guided=Ui.card(training)
+        Ui.title(guided,"Пошаговая настройка","Приложение покажет нужную кнопку, дождётся нажатия и отпускания, затем перейдёт дальше. Сохранение — в конце.")
+        Ui.button(guided,"Настроить только D-pad",true) { openCalibration("dpad") }
+        Ui.button(guided,"Пройти кнопки и триггеры") { openCalibration("buttons") }
+        Ui.button(guided,"Полная настройка: кнопки + стики") { openCalibration("full") }
+        guided.addView(Ui.text(this,"Настройка D-pad не меняет стики и остальные кнопки. Во время мастера мост останавливается, захват отключён.",13f,Ui.muted))
         val learn=Ui.card(training)
         Ui.title(learn,"Знакомство с DualSense","01  Включите диагностику\n02  Выберите элемент и нажмите «Обучить»\n03  Нажмите кнопку или подвигайте только выбранную ось")
         diagnosticButton=Ui.button(learn,"Начать диагностику без захвата",true) { start(true) }
@@ -133,18 +139,18 @@ class MainActivity : Activity() {
         targets=Ui.spinner(learn,labels)
         learnButton=Ui.button(learn,"Обучить выбранный элемент") {
             val pos=targets.selectedItemPosition
-            remote { it.learn(if(pos<17)1 else 3,if(pos<17)pos else intArrayOf(0,1,3,4,2,5,16,17)[pos-17]);notice("Ожидаю ввод: ${labels[pos]}. Нажмите кнопку или переместите ось.") }
+            remote { it.learn(if(pos in 13..16)4 else if(pos<17)1 else 3,if(pos<17)pos else intArrayOf(0,1,3,4,2,5,16,17)[pos-17]);notice("Ожидаю ввод: ${labels[pos]}. Нажмите кнопку или переместите ось.") }
         }
         learn.addView(Ui.text(this,"Перед обучением оси верните стик в центр или отпустите триггер. Остальные элементы не трогайте.",13f,Ui.muted))
         val saved=Ui.card(training)
         Ui.title(saved,"Ваша раскладка","Получите выученные назначения и сохраните их. Карта применяется при следующем запуске моста.")
         map=EditText(this).apply {
-            setText(getPreferences(0).getString("mapping","k 306 1\na 0 0\na 1 1\na 2 3\na 5 4\na 3 2\na 4 5\na 16 16\na 17 17\n"))
+            setText(getSharedPreferences("MainActivity",0).getString("mapping","k 306 1\na 0 0\na 1 1\na 2 3\na 5 4\na 3 2\na 4 5\na 16 16\na 17 17\n"))
             minLines=4;maxLines=8;gravity=android.view.Gravity.TOP;setTextColor(Ui.ink);textSize=13f;typeface=android.graphics.Typeface.MONOSPACE
             background=Ui.shape(Ui.bg);setPadding(Ui.dp(context,14),Ui.dp(context,12),Ui.dp(context,14),Ui.dp(context,12));visibility=android.view.View.GONE
         }
         Ui.button(saved,"Получить выученную карту") { remote { map.setText(it.mappings());notice("Карта получена. Нажмите «Сохранить раскладку».") } }
-        Ui.button(saved,"Сохранить раскладку",true) { getPreferences(0).edit().putString("mapping",map.text.toString()).apply();notice("Раскладка сохранена. Применится при следующем запуске.") }
+        Ui.button(saved,"Сохранить раскладку",true) { getSharedPreferences("MainActivity",0).edit().putString("mapping",map.text.toString()).apply();notice("Раскладка сохранена. Применится при следующем запуске.") }
         Ui.button(saved,"Редактировать коды вручную") { map.visibility=if(map.visibility==android.view.View.VISIBLE)android.view.View.GONE else android.view.View.VISIBLE }
         saved.addView(map)
         val tests=Ui.card(diagnostics)
@@ -168,6 +174,11 @@ class MainActivity : Activity() {
         Shizuku.addBinderDeadListener(dead)
         Shizuku.addRequestPermissionResultListener(permission)
         updateStatus()
+    }
+    private fun openCalibration(mode:String) {
+        if(bridge==null){notice("Сначала подключите Shizuku",true);return}
+        AlertDialog.Builder(this).setTitle("Открыть мастер?").setMessage("Текущий мост будет остановлен. Мастер читает физические события без захвата. Отпускайте каждую кнопку перед следующим шагом.")
+            .setPositiveButton("Начать") { _, _ -> startActivityForResult(Intent(this,CalibrationActivity::class.java).putExtra("mode",mode),43) }.setNegativeButton("Отмена",null).show()
     }
     private fun remote(action: (IBridge) -> Unit) {
         val b = bridge ?: run { status.text = "Сначала подключите Shizuku"; return }
@@ -276,6 +287,13 @@ class MainActivity : Activity() {
     @Deprecated("Activity API")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
+        if(requestCode==43) {
+            try { bridge?.let { val state=RuntimeState.parse(it.state());lastLearned=state.learned;lastTested=state.tested } }catch(_:Exception){}
+        }
+        if(requestCode==43&&resultCode==RESULT_OK) {
+            map.setText(getSharedPreferences("MainActivity",0).getString("mapping",map.text.toString()))
+            notice("Настройка сохранена. Запустите мост, чтобы проверить её в игре.")
+        }
         if (requestCode==42 && resultCode==RESULT_OK) data?.data?.let { uri ->
             try { contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write("DualSense Fix\n$latest\nMapping:\n${map.text}\nInput Report:\n$report\nAndroid events:\n${BridgeConnection.androidEvents}") } } catch(e: Exception) { status.text=e.toString() }
         }

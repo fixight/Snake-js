@@ -11,4 +11,5 @@ interface IBridge {
     void heartbeat() = 7;
     String inputReport() = 8;
     String state() = 9;
+    void replaceMapping(String mapping) = 10;
 }

@@ -4,6 +4,11 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RuntimeStateTest {
+    @Test fun calibrationWaitsForExplicitNeutralState() {
+        assertFalse(RuntimeState.parse("phase=diagnostics").neutral)
+        assertTrue(RuntimeState.parse("phase=diagnostics\nneutral=1").neutral)
+        assertFalse(RuntimeState.parse("phase=diagnostics\nneutral=0").neutral)
+    }
     @Test fun virtualDeviceAloneDoesNotMeanWorking() {
         val s=RuntimeState.parse("phase=waiting\nvirtual=1\ngrabbed=0\nphysical=Disconnected")
         assertTrue(s.busy);assertFalse(s.working);assertEquals("Ожидаем DualSense",s.title)
