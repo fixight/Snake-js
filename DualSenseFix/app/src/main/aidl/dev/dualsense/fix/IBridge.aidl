@@ -12,4 +12,5 @@ interface IBridge {
     String inputReport() = 8;
     String state() = 9;
     void replaceMapping(String mapping) = 10;
+    String validateMapping(String mapping) = 11;
 }

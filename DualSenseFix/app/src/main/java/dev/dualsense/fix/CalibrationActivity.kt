@@ -144,10 +144,10 @@ class CalibrationActivity:Activity() {
     }
     private fun save() {
         safe { b ->
-            b.learn(0,0);val mapping=b.mappings()
+            b.learn(0,0);val mapping=b.validateMapping(b.mappings())
             val missing=completed.keys.filter { id -> CalibrationPlan.binding(mapping,steps.first { it.id==id })!=completed[id] }
             if(missing.isNotEmpty()){feedback.text="Некоторые назначения изменились. Вернитесь к шагам: "+missing.joinToString();return@safe}
-            check(prefs.edit().putString("mapping",mapping).commit()) { "Не удалось сохранить раскладку. Повторите попытку." }
+            MappingStore.save(this,mapping,MappingStore.load(this))
             setResult(RESULT_OK);close();finish()
         }
     }

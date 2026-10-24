@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <stdexcept>
+#include "mapping_format.h"
 
 namespace dsfix {
 // Semantic button indexes: A,B,X,Y,L1,R1,L2,R2,Select,Start,Mode,L3,R3.
@@ -39,26 +40,22 @@ struct Mapping {
         return s.str();
     }
     void parse(const std::string& text) {
-        if(text.empty()) return;
-        std::map<int,int> k,a; std::vector<HatRule> h; std::istringstream s(text); std::string line;
-        while(std::getline(s,line)) {
-            if(line.empty()) continue;
-            std::istringstream row(line); char t; int from,to; std::string extra;
-            if(!(row>>t>>from>>to)) throw std::runtime_error("Invalid mapping line");
+        auto records=parseMapRecords(text);if(records.empty())return;
+        std::map<int,int> k,a;std::vector<HatRule> h;
+        for(auto record:records) {
+            char t=record.type;int from=record.source,to=record.value;
             if(t=='h') {
-                int neutral,target;
-                if(!(row>>neutral>>target) || row>>extra || from<0 || from>ABS_MAX || target<13 || target>16 || to==neutral)throw std::runtime_error("Invalid HAT mapping");
-                for(auto old:h)if(old.source==from&&(old.value==to || old.neutral!=neutral || hatAxis(old.target)!=hatAxis(target)))throw std::runtime_error("Conflicting HAT mapping");
-                h.push_back({from,to,neutral,target});continue;
-            }
-            if(row>>extra)throw std::runtime_error("Invalid mapping line");
-            if(t=='k' && from>=0 && from<=KEY_MAX && to>=0 && to<17) k[from]=to;
-            else if(t=='a' && from>=0 && from<=ABS_MAX && axisAllowed(to)) a[from]=to;
-            else throw std::runtime_error("Invalid mapping range");
+                int neutral=record.neutral,target=record.target;
+                if(from<0||from>ABS_MAX||target<13||target>16||to==neutral)formatError(record.line,"недопустимое направление HAT");
+                for(auto old:h)if(old.source==from&&(old.value==to||old.neutral!=neutral||hatAxis(old.target)!=hatAxis(target)))formatError(record.line,"конфликт направлений одной HAT-оси");
+                h.push_back({from,to,neutral,target});
+            } else if(t=='k'&&from>=0&&from<=KEY_MAX&&to>=0&&to<17)k[from]=to;
+            else if(t=='a'&&from>=0&&from<=ABS_MAX&&axisAllowed(to))a[from]=to;
+            else formatError(record.line,"код или назначение вне допустимого диапазона");
         }
         for(auto x=a.begin();x!=a.end();++x) for(auto y=std::next(x);y!=a.end();++y)
-            if(x->second==y->second) throw std::runtime_error("Duplicate output axis");
-        for(auto rule:h)for(auto axis:a)if(hatAxis(rule.target)==axis.second)throw std::runtime_error("Duplicate HAT output source");
+            if(x->second==y->second) throw std::runtime_error("Раскладка: две физические оси назначены на одну выходную ось");
+        for(auto rule:h)for(auto axis:a)if(hatAxis(rule.target)==axis.second)throw std::runtime_error("Раскладка: HAT-направление конфликтует с обычным назначением оси");
         keys=k; axes=a;hats=h;
     }
     void removeTarget(int target) {

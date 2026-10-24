@@ -58,5 +58,24 @@ int main(){
  e=off.convert(offset2,event(EV_ABS,16,2),0,range);assert(e.value==1);
  e=off.convert(offset2,event(EV_ABS,16,1),0,range);assert(e.value==0);
  assert(hats.axes.at(2)==3&&hats.axes.at(5)==4); // D-pad calibration preserves fixed sticks.
- std::cout<<"PASS: axis remap, normalization, deadzone, Circle, unknown keys, profiles, D-pad, SYN_REPORT, serialization, invalid mappings, directional HAT calibration, D-pad release/diagonals, mixed sources, preserved sticks\n";
+
+ // Regression: editable Android text may contain whitespace-only lines or flattened records.
+ Mapping clean;clean.parse("k 306 1\na 0 0\na 2 3\nh 16 1 0 16\n");
+ for(const std::string& raw:std::vector<std::string>{
+     "k 306 1\n   \t\r\na 0 0\na 2 3\nh 16 1 0 16\n",
+     "k 306 1 a 0 0 a 2 3 h 16 1 0 16",
+     "k 306 1\r\na 0 0\r\na 2 3\r\nh 16 1 0 16\r\n",
+     R"(k 306 1\na 0 0\na 2 3\nh 16 1 0 16\n)",
+     std::string("\xEF\xBB\xBF")+"k 306 1\na 0 0\na 2 3\nh 16 1 0 16\n",
+     std::string(u8"к 306 1\nа 0 0\nа 2 3\nh 16 1 0 16\n"),
+     "# layout\nk 306 1 # circle\na 0 0\na 2 3\nh 16 1 0 16\n"
+ }) {Mapping restored;restored.parse(raw);assert(restored.dump()==clean.dump());}
+ Mapping hex;hex.parse("k 0x132 1 a 0 0 a 0x02 0x03 h 0x10 1 0 16");assert(hex.dump()==clean.dump());
+ Mapping unicode;unicode.parse(u8"k 306 1\na 0 0\na 2 3\nh 16 1 0 16\n");assert(unicode.dump()==clean.dump());
+ auto saved=clean.dump();
+ for(const char* bad:{"k 306\n","k 306 wrong\n","a 0 0 extra\n","k 999999999999999999999 1\n","h 16 1 0\n"}) {
+     bool rejected=false;try{clean.parse(bad);}catch(const std::exception& ex){rejected=true;assert(std::string(ex.what()).find("Строка")!=std::string::npos);}
+     assert(rejected);assert(clean.dump()==saved); // Failed edit does not partially overwrite existing assignments.
+ }
+ std::cout<<"PASS: axis remap, normalization, deadzone, Circle, unknown keys, profiles, D-pad, SYN_REPORT, serialization, invalid mappings, directional HAT calibration, D-pad release/diagonals, mixed sources, preserved sticks, editable text normalization, fail-closed edits\n";
 }

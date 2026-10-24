@@ -228,3 +228,9 @@ extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeRep
     try {Mapping next;next.parse(text);std::lock_guard<std::mutex> l(mu);if(!running||!diagnosticMode)throw std::runtime_error("Mapping replacement requires diagnostics");mapping=next;learnType=0;}
     catch(const std::exception& ex){env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),ex.what());}
 }
+
+extern "C" JNIEXPORT jstring JNICALL Java_dev_dualsense_fix_BridgeService_nativeValidateMapping(JNIEnv* env,jobject,jstring config) {
+    const char* raw=env->GetStringUTFChars(config,nullptr);std::string text(raw);env->ReleaseStringUTFChars(config,raw);
+    try {Mapping next;next.parse(text);return env->NewStringUTF(next.dump().c_str());}
+    catch(const std::exception& ex){env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),ex.what());return nullptr;}
+}

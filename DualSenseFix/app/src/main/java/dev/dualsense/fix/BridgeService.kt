@@ -8,12 +8,14 @@ class BridgeService(context: Context) : IBridge.Stub() {
     override fun info() = "UserService uid=${Process.myUid()} pid=${Process.myPid()} (требуется uid=2000)"
     override fun start(profile: Int, grab: Boolean, diagnostic: Boolean, mapping: String) {
         check(Process.myUid() == 2000) { "Требуется Shizuku в ADB shell режиме" }
-        nativeStart(profile, grab, diagnostic, mapping)
+        nativeStart(profile, grab, diagnostic, nativeValidateMapping(mapping))
     }
     override fun stop() = nativeStop()
     override fun snapshot() = nativeSnapshot()
     override fun state() = nativeState()
     private external fun nativeState(): String
+    override fun validateMapping(mapping: String) = nativeValidateMapping(mapping)
+    private external fun nativeValidateMapping(mapping: String): String
     override fun replaceMapping(mapping: String) = nativeReplaceMapping(mapping)
     private external fun nativeReplaceMapping(mapping: String)
     override fun mappings() = nativeMappings()

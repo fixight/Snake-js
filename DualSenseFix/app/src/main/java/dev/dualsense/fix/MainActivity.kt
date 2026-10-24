@@ -25,6 +25,7 @@ class MainActivity : Activity() {
     private lateinit var bridgeState: TextView
     private lateinit var bridgeDetail: TextView
     private lateinit var errorState: TextView
+    private lateinit var recoveryButton: Button
     private lateinit var progress: ProgressBar
     private lateinit var connectButton: Button
     private lateinit var startButton: Button
@@ -98,6 +99,7 @@ class MainActivity : Activity() {
         progress=ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate=true;visibility=android.view.View.GONE };health.addView(progress,LinearLayout.LayoutParams(-1,Ui.dp(this,6)))
         errorState=Ui.text(this,"",13f,android.graphics.Color.rgb(255,174,184));health.addView(errorState)
         health.addView(status);Ui.gap(health,6)
+        recoveryButton=Ui.button(health,"Восстановить раскладку") { recoverMapping() }
         repeat(3) { pages.add(Ui.column(this).also { content.addView(it) }) }
         fun select(index:Int) {
             pages.forEachIndexed { i,v -> v.visibility=if(i==index)android.view.View.VISIBLE else android.view.View.GONE }
@@ -145,12 +147,17 @@ class MainActivity : Activity() {
         val saved=Ui.card(training)
         Ui.title(saved,"Ваша раскладка","Получите выученные назначения и сохраните их. Карта применяется при следующем запуске моста.")
         map=EditText(this).apply {
-            setText(getSharedPreferences("MainActivity",0).getString("mapping","k 306 1\na 0 0\na 1 1\na 2 3\na 5 4\na 3 2\na 4 5\na 16 16\na 17 17\n"))
+            inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            setSingleLine(false);setHorizontallyScrolling(false)
+            importantForAutofill=android.view.View.IMPORTANT_FOR_AUTOFILL_NO
+            setText(MappingStore.load(this@MainActivity))
             minLines=4;maxLines=8;gravity=android.view.Gravity.TOP;setTextColor(Ui.ink);textSize=13f;typeface=android.graphics.Typeface.MONOSPACE
             background=Ui.shape(Ui.bg);setPadding(Ui.dp(context,14),Ui.dp(context,12),Ui.dp(context,14),Ui.dp(context,12));visibility=android.view.View.GONE
         }
         Ui.button(saved,"Получить выученную карту") { remote { map.setText(it.mappings());notice("Карта получена. Нажмите «Сохранить раскладку».") } }
-        Ui.button(saved,"Сохранить раскладку",true) { getSharedPreferences("MainActivity",0).edit().putString("mapping",map.text.toString()).apply();notice("Раскладка сохранена. Применится при следующем запуске.") }
+        Ui.button(saved,"Сохранить раскладку",true) { saveEditorMapping() }
+        Ui.button(saved,"Проверить и исправить формат") { formatMapping() }
+        Ui.button(saved,"Восстановление раскладки") { recoverMapping() }
         Ui.button(saved,"Редактировать коды вручную") { map.visibility=if(map.visibility==android.view.View.VISIBLE)android.view.View.GONE else android.view.View.VISIBLE }
         saved.addView(map)
         val tests=Ui.card(diagnostics)
@@ -175,6 +182,45 @@ class MainActivity : Activity() {
         Shizuku.addRequestPermissionResultListener(permission)
         updateStatus()
     }
+    private fun saveEditorMapping() {
+        remote { b ->
+            val raw=map.text.toString()
+            if(raw.isBlank()){notice("Карта пуста. Для базового профиля используйте «Восстановление раскладки».",true);return@remote}
+            try {
+                val canonical=b.validateMapping(raw)
+                MappingStore.save(this,canonical,raw);BridgeConnection.error="";map.setText(canonical)
+                notice("Раскладка проверена и сохранена. Предыдущий текст оставлен в резервной копии.")
+            }catch(e:Exception){notice(e.message ?: e.toString(),true)}
+        }
+    }
+    private fun formatMapping() {
+        remote { b ->
+            val raw=map.text.toString()
+            if(raw.isBlank()){notice("Карта пуста. Выберите базовый профиль через восстановление.",true);return@remote}
+            try {
+                MappingStore.backup(this,raw)
+                val canonical=b.validateMapping(raw)
+                map.setText(canonical)
+                notice("Формат проверен. Числовые назначения сохранены. Нажмите «Сохранить раскладку».")
+            }catch(e:Exception){notice(e.message ?: e.toString(),true);AlertDialog.Builder(this).setTitle("Не удалось исправить карту без догадок").setMessage((e.message ?: e.toString())+"\n\nИсходный текст сохранён в резервной копии и попадёт в экспорт журнала. Исправьте указанное место или выберите базовый профиль через восстановление.").setPositiveButton("Понятно",null).show()}
+        }
+    }
+    private fun recoverMapping() {
+        val previous=MappingStore.previous(this)
+        val options=mutableListOf("Исправить формат, сохранив назначения")
+        if(previous!=null)options.add("Вернуть предыдущую проверенную по формату карту")
+        options.add("Вернуть базовый профиль с исправлением стиков")
+        AlertDialog.Builder(this).setTitle("Восстановление раскладки").setItems(options.toTypedArray()) { _, index ->
+            if(index==0){formatMapping();return@setItems}
+            val base=index==options.lastIndex
+            AlertDialog.Builder(this).setTitle(if(base)"Восстановить базовый профиль?" else "Вернуть сохранённую карту?")
+                .setMessage(if(base)"Назначения кнопок потребуется обучить заново. Базовая перестановка осей стиков и триггеров останется. Текущий текст будет сохранён в резервной копии." else "Текущий текст будет сохранён в резервной копии. После восстановления потребуется запустить мост заново.")
+                .setPositiveButton("Восстановить") { _, _ -> remote { b ->
+                    try { val canonical=b.validateMapping(if(base)MappingStore.DEFAULT else previous!!);MappingStore.save(this,canonical,map.text.toString());BridgeConnection.error="";map.setText(canonical);notice("Раскладка восстановлена. Запустите мост заново.") }
+                    catch(e:Exception){notice(e.message ?: e.toString(),true)}
+                } }.setNegativeButton("Отмена",null).show()
+        }.setNegativeButton("Закрыть",null).show()
+    }
     private fun openCalibration(mode:String) {
         if(bridge==null){notice("Сначала подключите Shizuku",true);return}
         AlertDialog.Builder(this).setTitle("Открыть мастер?").setMessage("Текущий мост будет остановлен. Мастер читает физические события без захвата. Отпускайте каждую кнопку перед следующим шагом.")
@@ -194,7 +240,7 @@ class MainActivity : Activity() {
     private fun renderState() {
         val connected=bridge!=null
         val saved=BridgeConnection.lastState
-        val state=if(!connected) saved.copy(phase=if(saved.busy)"lost" else saved.phase,virtual=false,grabbed=false,physical="Disconnected") else saved
+        val state=if(connected&&BridgeConnection.error.isNotEmpty()&&!saved.busy)saved.copy(phase="error",error=BridgeConnection.error) else if(!connected) saved.copy(phase=if(saved.busy)"lost" else saved.phase,virtual=false,grabbed=false,physical="Disconnected") else saved
         var available=false
         var permitted=false
         try { available=Shizuku.pingBinder();permitted=available&&Shizuku.checkSelfPermission()==PackageManager.PERMISSION_GRANTED }catch(_:Exception){}
@@ -213,6 +259,7 @@ class MainActivity : Activity() {
         bridgeState.setTextColor(if(state.working)Ui.accent else if(state.phase in setOf("error","lost"))android.graphics.Color.rgb(255,174,184) else Ui.ink)
         bridgeDetail.text=state.detail
         val error=listOf(BridgeConnection.error,state.error).filter { it.isNotEmpty() }.distinct().joinToString("\n")
+        recoveryButton.visibility=if(error.contains("mapping",true)||error.contains("Строка")||error.contains("раскладк",true))android.view.View.VISIBLE else android.view.View.GONE
         errorState.text=error;errorState.visibility=if(error.isEmpty())android.view.View.GONE else android.view.View.VISIBLE
         deviceState.text=if(!connected) "○  DualSense · сначала подключите Shizuku" else if(state.physical!="Disconnected") "●  DualSense · подключён" else if(state.busy) "○  DualSense · поиск устройства…" else "○  DualSense · проверяется при запуске"
         virtualState.text=if(state.virtual) "●  Виртуальный контроллер · создан" else "○  Виртуальный контроллер · выключен"
@@ -220,7 +267,7 @@ class MainActivity : Activity() {
         virtualState.setTextColor(if(state.virtual)Ui.accent else Ui.muted)
         if(connected&&!connectionWasReady)notice("Shizuku подключён. Shell-доступ подтверждён.")
         connectionWasReady=connected
-        if(state.phase!=renderedPhase&&operation.isEmpty())notice(state.title+". "+state.detail,state.phase in setOf("error","lost"))
+        if(state.phase!=renderedPhase&&operation.isEmpty())notice(if(state.phase=="error")"Причина указана выше. Для ошибки карты доступно восстановление раскладки." else state.title+". "+state.detail,state.phase in setOf("error","lost"))
         if(operation.isEmpty())renderedPhase=state.phase
         if(BridgeConnection.error.isNotEmpty()&&BridgeConnection.error!=renderedConnectionError)notice(BridgeConnection.error,true)
         renderedConnectionError=BridgeConnection.error
@@ -261,7 +308,10 @@ class MainActivity : Activity() {
         lastLearned=0;lastTested=0
         control.execute {
             try {
-                b.start(chosenProfile,grab,diagnostic,config)
+                val canonical=b.validateMapping(config)
+                MappingStore.remember(applicationContext,canonical)
+                b.start(chosenProfile,grab,diagnostic,canonical)
+                handler.post { if(!isDestroyed&&map.text.toString()==config)map.setText(canonical) }
                 val state=RuntimeState.parse(b.state());BridgeConnection.lastState=state
                 if(state.busy)applicationContext.startForegroundService(Intent(applicationContext,BridgeKeeper::class.java))
             }catch(e:Exception){try{b.stop()}catch(_:Exception){};BridgeConnection.error="Не удалось запустить мост: ${e.message ?: e.toString()}";BridgeConnection.lastState=RuntimeState(phase="error",error=e.message ?: e.toString())}
@@ -295,7 +345,7 @@ class MainActivity : Activity() {
             notice("Настройка сохранена. Запустите мост, чтобы проверить её в игре.")
         }
         if (requestCode==42 && resultCode==RESULT_OK) data?.data?.let { uri ->
-            try { contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write("DualSense Fix\n$latest\nMapping:\n${map.text}\nInput Report:\n$report\nAndroid events:\n${BridgeConnection.androidEvents}") } } catch(e: Exception) { status.text=e.toString() }
+            try { contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write("DualSense Fix\n$latest\nMapping:\n${map.text}\nStored mappings / backups:\n${MappingStore.diagnostic(this)}\nInput Report:\n$report\nAndroid events:\n${BridgeConnection.androidEvents}") } } catch(e: Exception) { status.text=e.toString() }
         }
     }
 }
