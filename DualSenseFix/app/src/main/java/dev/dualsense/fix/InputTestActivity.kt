@@ -16,21 +16,28 @@ class InputTestActivity: Activity() {
     }
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        val box=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;setPadding(20,20,20,20) }
-        setContentView(ScrollView(this).apply { addView(box) })
-        box.addView(TextView(this).apply { text="Android Input Tester: нажмите кнопки и подвигайте оси. Смотрите имя устройства DSFIX и Android AXIS_*, а не только сырые evdev коды." })
-        box.addView(Button(this).apply { text="Тест A/Cross через uinput";setOnClickListener { try { BridgeConnection.bridge?.testButton() }catch(e:Exception){show(e.toString())} } })
-        box.addView(Button(this).apply { text="Обновить список Android устройств";setOnClickListener { devices() } })
-        box.addView(Button(this).apply { text="Назад";setOnClickListener { finish() } })
-        output=TextView(this).apply { setTextIsSelectable(true) };box.addView(output);devices()
+        val box=Ui.column(this).apply { setPadding(Ui.dp(context,20),Ui.dp(context,24),Ui.dp(context,20),Ui.dp(context,24)) }
+        setContentView(ScrollView(this).apply { fitsSystemWindows=true;addView(box) })
+        box.addView(Ui.text(this,"Проверка ввода",28f));Ui.gap(box,8)
+        box.addView(Ui.text(this,"Нажимайте кнопки и двигайте стики. Здесь отображаются события, которые получает Android.",14f,Ui.muted));Ui.gap(box,24)
+        val controls=Ui.card(box)
+        Ui.button(controls,"Тестовое нажатие ✕ / A",true) { try { val b=BridgeConnection.bridge;if(b==null)show("Сначала подключите Shizuku и запустите мост.") else b.testButton() }catch(e:Exception){show(e.toString())} }
+        Ui.button(controls,"Обновить устройства") { devices() }
+        Ui.button(controls,"Вернуться к мосту") { finish() }
+        val events=Ui.card(box)
+        Ui.title(events,"События Android","Кнопки KEYCODE, оси AXIS и диапазоны виртуального устройства.")
+        output=Ui.text(this,BridgeConnection.androidEvents.ifEmpty { "Ожидание событий…" },13f,Ui.muted).apply { setTextIsSelectable(true);typeface=android.graphics.Typeface.MONOSPACE };events.addView(output);devices()
     }
     private fun devices() {
+        var found=false
         for(id in InputDevice.getDeviceIds()) InputDevice.getDevice(id)?.let { d ->
             if(d.name.startsWith("DSFIX")) {
+                found=true
                 show("${d.name} id=${d.id} sources=0x${d.sources.toString(16)} VID=${d.vendorId} PID=${d.productId}")
                 d.motionRanges.forEach { show("${MotionEvent.axisToString(it.axis)} min=${it.min} max=${it.max} flat=${it.flat}") }
             }
         }
+        if(!found)show("Виртуальный контроллер пока не найден. Запустите мост на главном экране.")
     }
     override fun dispatchKeyEvent(e: KeyEvent): Boolean {
         if(e.isFromSource(InputDevice.SOURCE_GAMEPAD)||e.isFromSource(InputDevice.SOURCE_JOYSTICK)) {
