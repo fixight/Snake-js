@@ -10,4 +10,5 @@ interface IBridge {
     void testButton() = 6;
     void heartbeat() = 7;
     String inputReport() = 8;
+    String state() = 9;
 }

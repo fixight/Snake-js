@@ -21,7 +21,7 @@ class InputTestActivity: Activity() {
         box.addView(Ui.text(this,"Проверка ввода",28f));Ui.gap(box,8)
         box.addView(Ui.text(this,"Нажимайте кнопки и двигайте стики. Здесь отображаются события, которые получает Android.",14f,Ui.muted));Ui.gap(box,24)
         val controls=Ui.card(box)
-        Ui.button(controls,"Тестовое нажатие ✕ / A",true) { try { val b=BridgeConnection.bridge;if(b==null)show("Сначала подключите Shizuku и запустите мост.") else b.testButton() }catch(e:Exception){show(e.toString())} }
+        Ui.button(controls,"Тестовое нажатие ✕ / A",true) { try { val b=BridgeConnection.bridge;if(b==null)show("Сначала подключите Shizuku и запустите мост.") else { if(!RuntimeState.parse(b.state()).virtual)show("Виртуальный контроллер выключен. Запустите мост на главном экране.") else { b.testButton();show("Тест запрошен. Ожидаем событие KEYCODE_BUTTON_A от Android.") } } }catch(e:Exception){show(e.toString())} }
         Ui.button(controls,"Обновить устройства") { devices() }
         Ui.button(controls,"Вернуться к мосту") { finish() }
         val events=Ui.card(box)

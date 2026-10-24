@@ -5,7 +5,9 @@
 Kotlin UI → поддерживаемый Shizuku UserService (UID 2000) → JNI C++17 → evdev/uinput.
 Проект независим от Snake-js. Интернет нужен только для сборки; приложение не запрашивает INTERNET.
 
-## Интерфейс 0.2
+## Интерфейс 0.3
+
+Постоянная карточка показывает подтверждённое подключение shell-службы Shizuku, запуск/остановку, ожидание контроллера, диагностику и ошибки. Статусы обновляются из отдельного протокола состояния JNI; наличие виртуального устройства само по себе не означает работу моста. Уведомление отражает тот же режим. Для подключения предусмотрен таймаут 12 секунд и повторная попытка.
 
 Тёмная тема с бирюзовыми акцентами. Вкладка **Мост** — подключение и управление; **Кнопки** — обучение и сохранение раскладки; **Журнал** — проверка Android-ввода, отчёты и экспорт. Ручное редактирование кодов раскрывается отдельно.
 
@@ -25,7 +27,7 @@ READABLE/WRITABLE не гарантируют успех EVIOCGRAB/UI_DEV_CREATE
 export ANDROID_HOME=/path/to/android-sdk
 sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
 ./scripts/test-host.sh
-./gradlew --no-daemon assembleDebug lintDebug
+./gradlew --no-daemon assembleDebug lintDebug testDebugUnitTest
 ```
 
 Подписанный debug APK: `app/build/outputs/apk/debug/app-debug.apk`; только arm64-v8a; minSdk 26, targetSdk 35.

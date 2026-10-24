@@ -26,10 +26,13 @@ Mapping mapping;
 int learnType=0,learnTarget=0;
 std::map<int,int> currentAxes, baseline;
 std::atomic<bool> diagnosticMode{false};
-std::string status="Stopped", device="Disconnected";
+std::string status="Stopped", device="Disconnected", phase="stopped", lastError;
+bool virtualReady=false, exclusive=false;
+int learnedRevision=0, testRevision=0;
 long long now() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 void log(const std::string& s) {std::lock_guard<std::mutex> l(mu); logs.push_back(s); if(logs.size()>180) logs.pop_front();}
-void state(const std::string& s) {std::lock_guard<std::mutex> l(mu);status=s;}
+void state(const std::string& s,const std::string& p) {std::lock_guard<std::mutex> l(mu);status=s;phase=p;}
+void failure(const std::string& s) {log("ERROR: "+s);std::lock_guard<std::mutex> l(mu);lastError=s;phase="error";}
 struct Fd {int fd=-1; explicit Fd(int n=-1):fd(n){} ~Fd(){if(fd>=0)close(fd);} Fd(const Fd&)=delete;};
 struct Output : Fd { bool created=false; ~Output(){if(created)ioctl(fd,UI_DEV_DESTROY);} };
 void check(bool ok,const char* text) {if(!ok)throw std::runtime_error(std::string(text)+": "+strerror(errno));}
@@ -79,7 +82,7 @@ void create(Output& o,int profile) {
     }
     const char* phys="DSFIX-bridge";check(ioctl(o.fd,UI_SET_PHYS,phys)>=0,"UI_SET_PHYS");
     check(write(o.fd,&d,sizeof(d))==sizeof(d),"uinput setup");
-    check(ioctl(o.fd,UI_DEV_CREATE)>=0,"UI_DEV_CREATE");o.created=true;
+    check(ioctl(o.fd,UI_DEV_CREATE)>=0,"UI_DEV_CREATE");o.created=true;{std::lock_guard<std::mutex> l(mu);virtualReady=true;}
     for(int a:{0,1,2,3,4,5,16,17})send(o.fd,EV_ABS,a,0);
     send(o.fd,EV_SYN,SYN_REPORT,0);
     log("Virtual device created. Confirm KeyLayoutFile/Sources/Motion Ranges with Input Report.");
@@ -119,9 +122,9 @@ void run(int profile,bool grab,bool diagnostic) {
         else {diagnostic=true;diagnosticMode=true;log("Safe diagnostics: no grab, no forwarding.");}
         while(running && now()-lease<5000) {
             std::string path;Fd physical(discover(path));
-            if(physical.fd<0) {state("Waiting for DualSense; virtual="+std::string(out.created?"ready":"off"));
+            if(physical.fd<0) {state("Waiting for DualSense; virtual="+std::string(out.created?"ready":"off"),"waiting");
                 for(int i=0;i<10&&running&&now()-lease<5000;i++) {
-                    if(test.exchange(false)&&out.created){send(out.fd,EV_KEY,button(0,profile),1);send(out.fd,EV_SYN,SYN_REPORT,0);send(out.fd,EV_KEY,button(0,profile),0);send(out.fd,EV_SYN,SYN_REPORT,0);log("Synthetic A/Cross sent");}
+                    if(test.exchange(false)&&out.created){send(out.fd,EV_KEY,button(0,profile),1);send(out.fd,EV_SYN,SYN_REPORT,0);send(out.fd,EV_KEY,button(0,profile),0);send(out.fd,EV_SYN,SYN_REPORT,0);log("Synthetic A/Cross sent");{std::lock_guard<std::mutex> l(mu);++testRevision;}}
                     poll(nullptr,0,100);
                 }continue;}
             {std::lock_guard<std::mutex> l(mu);device=path;}
@@ -129,14 +132,14 @@ void run(int profile,bool grab,bool diagnostic) {
             for(int i=0;i<=ABS_MAX;i++){input_absinfo r{};if(ioctl(physical.fd,EVIOCGABS(i),&r)>=0){ranges[i]=r;previous[i]=r.value;{std::lock_guard<std::mutex> l(mu);currentAxes[i]=r.value;}log("ABS "+std::to_string(i)+" min="+std::to_string(r.minimum)+" max="+std::to_string(r.maximum)+" current="+std::to_string(r.value));}}
             bool grabbed=false;
             if(!diagnostic) {
-                if(ioctl(physical.fd,EVIOCGRAB,1)<0){log("EVIOCGRAB denied: "+std::string(strerror(errno))+". Diagnostics only; forwarding disabled.");diagnostic=true;diagnosticMode=true;if(out.created){ioctl(out.fd,UI_DEV_DESTROY);out.created=false;}}
-                else {grabbed=true;log("EVIOCGRAB acquired");syncState(physical.fd,out.fd,profile,ranges);}
+                if(ioctl(physical.fd,EVIOCGRAB,1)<0){log("EVIOCGRAB denied: "+std::string(strerror(errno))+". Diagnostics only; forwarding disabled.");{std::lock_guard<std::mutex> l(mu);lastError="EVIOCGRAB denied: "+std::string(strerror(errno));}diagnostic=true;diagnosticMode=true;if(out.created){ioctl(out.fd,UI_DEV_DESTROY);out.created=false;{std::lock_guard<std::mutex> l(mu);virtualReady=false;}}}
+                else {grabbed=true;{std::lock_guard<std::mutex> l(mu);exclusive=true;}log("EVIOCGRAB acquired");syncState(physical.fd,out.fd,profile,ranges);}
             }
-            state(diagnostic?"Diagnostics: physical input remains enabled":"Bridge active; physical grabbed; virtual ready");
+            state(diagnostic?"Diagnostics: physical input remains enabled":"Bridge active; physical grabbed; virtual ready",diagnostic?"diagnostics":"running");
             // physical FD closure releases EVIOCGRAB even after exceptions/process death.
             bool dropped=false;
             while(running&&now()-lease<5000) {
-                if(test.exchange(false)&&out.created){send(out.fd,EV_KEY,button(0,profile),1);send(out.fd,EV_SYN,SYN_REPORT,0);send(out.fd,EV_KEY,button(0,profile),0);send(out.fd,EV_SYN,SYN_REPORT,0);log("Synthetic A/Cross sent");}
+                if(test.exchange(false)&&out.created){send(out.fd,EV_KEY,button(0,profile),1);send(out.fd,EV_SYN,SYN_REPORT,0);send(out.fd,EV_KEY,button(0,profile),0);send(out.fd,EV_SYN,SYN_REPORT,0);log("Synthetic A/Cross sent");{std::lock_guard<std::mutex> l(mu);++testRevision;}}
                 pollfd p{physical.fd,POLLIN,0};int ready=poll(&p,1,100);if(ready<0&&errno==EINTR)continue;check(ready>=0,"poll");if(!ready)continue;if(p.revents&(POLLHUP|POLLERR|POLLNVAL))break;
                 input_event events[64];ssize_t n=read(physical.fd,events,sizeof(events));if(n<0&&(errno==EAGAIN||errno==EINTR))continue;if(n<=0)break;check(n%sizeof(input_event)==0,"partial input_event");
                 for(size_t i=0;i<size_t(n)/sizeof(input_event);i++) {
@@ -150,7 +153,7 @@ void run(int profile,bool grab,bool diagnostic) {
                         if(learnType==e.type&&((e.type==EV_KEY&&e.value==1)||(e.type==EV_ABS&&ranges.count(e.code)&&std::abs(e.value-baseline[e.code])>=std::max(1,(ranges[e.code].maximum-ranges[e.code].minimum)/5)))) {
                             auto& m=e.type==EV_KEY?mapping.keys:mapping.axes;
                             for(auto it=m.begin();it!=m.end();)if(it->second==learnTarget)it=m.erase(it);else ++it;
-                            m[e.code]=learnTarget;learnType=0;
+                            m[e.code]=learnTarget;learnType=0;++learnedRevision;
                             logs.push_back("LEARNED code="+std::to_string(e.code)+" target="+std::to_string(learnTarget));
                         }
                     }
@@ -164,19 +167,19 @@ void run(int profile,bool grab,bool diagnostic) {
             }
             if(grabbed)ioctl(physical.fd,EVIOCGRAB,0);
             if(out.created)neutral(out.fd,profile);
-            {std::lock_guard<std::mutex> l(mu);device="Disconnected";}
+            {std::lock_guard<std::mutex> l(mu);device="Disconnected";exclusive=false;}
             log("Physical released/disconnected");
         }
-        if(running)log("UI heartbeat lost: stopped by 5s watchdog");
-    } catch(const std::exception& e){log(std::string("ERROR: ")+e.what());}
-    state("Stopped; physical released; virtual destroyed");running=false;
+        if(running)failure("Heartbeat lost: stopped by 5s watchdog");
+    } catch(const std::exception& e){failure(e.what());}
+    {std::lock_guard<std::mutex> l(mu);status="Stopped; physical released; virtual destroyed";phase=lastError.empty()?"stopped":"error";virtualReady=false;exclusive=false;device="Disconnected";learnType=0;}running=false;
 }
 void stop(){running=false;if(worker.joinable())worker.join();}
 }
 extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeStart(JNIEnv* env,jobject,jint profile,jboolean grab,jboolean diagnostic,jstring config) {
     stop();const char* raw=env->GetStringUTFChars(config,nullptr);std::string text(raw);env->ReleaseStringUTFChars(config,raw);
-    try {Mapping next;next.parse(text);{std::lock_guard<std::mutex> l(mu);mapping=next;learnType=0;logs.clear();}lease=now();test=false;running=true;worker=std::thread(run,profile==1?1:0,bool(grab),bool(diagnostic));}
-    catch(const std::exception& e){log(std::string("ERROR: ")+e.what());}
+    try {{std::lock_guard<std::mutex> l(mu);learnType=0;logs.clear();lastError.clear();phase="starting";status="Starting";virtualReady=false;exclusive=false;learnedRevision=0;testRevision=0;}Mapping next;next.parse(text);{std::lock_guard<std::mutex> l(mu);mapping=next;}lease=now();test=false;running=true;worker=std::thread(run,profile==1?1:0,bool(grab),bool(diagnostic));}
+    catch(const std::exception& e){failure(e.what());}
 }
 extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeStop(JNIEnv*,jobject){stop();}
 extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeHeartbeat(JNIEnv*,jobject){lease=now();}
@@ -184,3 +187,10 @@ extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeTes
 extern "C" JNIEXPORT void JNICALL Java_dev_dualsense_fix_BridgeService_nativeLearn(JNIEnv*,jobject,jint type,jint target){std::lock_guard<std::mutex> l(mu);if(running&&diagnosticMode&&((type==EV_KEY&&target>=0&&target<17)||(type==EV_ABS&&axisAllowed(target)))){learnType=type;learnTarget=target;baseline=currentAxes;}}
 extern "C" JNIEXPORT jstring JNICALL Java_dev_dualsense_fix_BridgeService_nativeMappings(JNIEnv* e,jobject){std::lock_guard<std::mutex> l(mu);return e->NewStringUTF(mapping.dump().c_str());}
 extern "C" JNIEXPORT jstring JNICALL Java_dev_dualsense_fix_BridgeService_nativeSnapshot(JNIEnv* e,jobject){std::lock_guard<std::mutex> l(mu);std::string s=status+"\nDualSense: "+device+"\n";for(const auto& l:logs)s+=l+"\n";return e->NewStringUTF(s.c_str());}
+
+extern "C" JNIEXPORT jstring JNICALL Java_dev_dualsense_fix_BridgeService_nativeState(JNIEnv* e,jobject){
+    std::lock_guard<std::mutex> l(mu);
+    std::string error=lastError;std::replace(error.begin(),error.end(),'\n',' ');
+    std::string s="phase="+phase+"\nphysical="+device+"\nvirtual="+(virtualReady?"1":"0")+"\ngrabbed="+(exclusive?"1":"0")+"\ndiagnostic="+(diagnosticMode?"1":"0")+"\nerror="+error+"\nlearning="+std::to_string(learnType)+"\nlearned="+std::to_string(learnedRevision)+"\ntested="+std::to_string(testRevision);
+    return e->NewStringUTF(s.c_str());
+}

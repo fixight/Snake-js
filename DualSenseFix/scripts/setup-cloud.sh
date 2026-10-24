@@ -56,4 +56,4 @@ subprocess.run(b+['platforms;android-35','build-tools;35.0.0','ndk;27.2.12479018
 PY
 cd "$project_dir"
 ./scripts/test-host.sh
-./gradlew --no-daemon assembleDebug lintDebug
+./gradlew --no-daemon assembleDebug lintDebug testDebugUnitTest

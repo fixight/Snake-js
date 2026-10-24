@@ -12,6 +12,8 @@ class BridgeService(context: Context) : IBridge.Stub() {
     }
     override fun stop() = nativeStop()
     override fun snapshot() = nativeSnapshot()
+    override fun state() = nativeState()
+    private external fun nativeState(): String
     override fun mappings() = nativeMappings()
     override fun learn(type: Int, target: Int) = nativeLearn(type, target)
     override fun testButton() = nativeTest()
